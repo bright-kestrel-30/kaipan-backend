@@ -1,0 +1,1 @@
+{"description":"开盘 · 股市盲盒挑战共享排行榜后端（Node.js 版，供 Abasthan 等无 D1 的 PaaS 部署）","engines":{"node":">=24"},"name":"kaipan-backend-node","private":true,"scripts":{"start":"node index.mjs"},"type":"module","version":"1.0.0"}
