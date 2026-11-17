@@ -10,6 +10,7 @@
 // 例如前端发布在 https://muse.ai/s/xxxx/... 时，来源就是 https://muse.ai
 const ALLOWED_ORIGINS = new Set([
   'https://muse.ai',
+  'https://bright-kestrel-30.github.io',
 ]);
 
 export const OPEN = 266;
