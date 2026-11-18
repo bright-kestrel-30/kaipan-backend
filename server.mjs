@@ -92,6 +92,16 @@ export async function handle(req, env) {
     // 允许 Authorization 头：前端在第三方 Cookie 被拦截时改用 Bearer Token 传递身份
     if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: { ...corsHeaders, 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type, Authorization', 'Access-Control-Max-Age': '86400' } });
     if (!db) return reply({ error: '排行榜服务尚未配置' }, 503);
+    // ---- 诊断接口：股票清单加载数 + 东财连通性（不含敏感信息）----
+    if (url.pathname === '/api/health' && req.method === 'GET') {
+      let eastmoney = 'unknown', eastmoneyError = null;
+      try {
+        const r = await fetch(`${EASTMONEY_HOST}/api/qt/stock/kline/get?secid=1.600519&klt=101&fqt=1&beg=20250101&end=${todayYmd()}&fields1=f1,f2,f3,f4,f5&fields2=f51,f52,f53,f54,f55,f56,f57`, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(8000) });
+        if (!r.ok) eastmoney = 'http_' + r.status;
+        else { const d = await r.json(); eastmoney = (d?.data?.klines?.length) ? 'ok' : 'no_data'; }
+      } catch (e) { eastmoney = 'error'; eastmoneyError = String((e && e.message) || e); }
+      return reply({ ok: true, stocks: STOCKS.length, eastmoney, eastmoneyError });
+    }
     if (req.method === 'POST') {
       // 原版：Origin 与本域不同即 403；补丁版：白名单内的前端来源也放行
       if (origin && origin !== url.origin && !ALLOWED_ORIGINS.has(origin)) return reply({ error: '请求来源不匹配' }, 403);
