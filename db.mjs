@@ -39,6 +39,7 @@ CREATE TABLE \`sessions\` (
 	\`created\` integer NOT NULL,
 	\`finished\` integer,
 	\`ret\` real,
+	\`hold\` real,
 	\`dd\` real,
 	\`trades\` integer,
 	FOREIGN KEY (\`player\`) REFERENCES \`players\`(\`id\`) ON UPDATE no action ON DELETE no action
@@ -68,6 +69,9 @@ function initSchema(db) {
       .replace(/^CREATE INDEX /i, 'CREATE INDEX IF NOT EXISTS ');
     db.exec(idempotent);
   }
+  // 2026-11-18：新增 hold 列（首日开盘买入并持有到结算的基准收益），供“跑赢持有”排名；老库补列
+  const cols = db.prepare('PRAGMA table_info(`sessions`)').all().map(c => c.name);
+  if (!cols.includes('hold')) db.exec('ALTER TABLE `sessions` ADD COLUMN `hold` real');
 }
 
 export function createDB(dbPath) {
