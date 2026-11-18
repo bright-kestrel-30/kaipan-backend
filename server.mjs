@@ -12,7 +12,6 @@ import { fileURLToPath } from 'node:url';
 
 // ---- 真实行情：全市场股票清单（东财 f12 代码 / f13 市场 / f14 名称）----
 // stocks.json 与本文件同目录；读不到时 STOCKS 为空，开局自动走随机生成兜底。
-const EASTMONEY_HOST = 'https://push2his.eastmoney.com';
 let STOCKS = [];
 try { STOCKS = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'stocks.json'), 'utf8')); } catch { STOCKS = []; }
 
@@ -29,22 +28,23 @@ const fee = v => Math.max(5, v * .0003);
 export function initial() { return { cash: 100000, shares: 0, peak: 100000, drawdown: 0, trades: [], baseShares: 0, baseCash: 100000 } }
 // 当天（北京时间）YYYYMMDD，供东财 K 线接口的 end 参数
 const todayYmd = () => new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10).replace(/-/g, '');
-// 拉一只股票自 2023-01-01 以来的前复权日 K 线，返回 [[日期,开,收,高,低,量], ...]
-async function fetchEastmoneyKlines(market, code) {
-  const url = `${EASTMONEY_HOST}/api/qt/stock/kline/get?secid=${market}.${code}&klt=101&fqt=1&beg=20230101&end=${todayYmd()}&fields1=f1,f2,f3,f4,f5&fields2=f51,f52,f53,f54,f55,f56,f57`;
-  const r = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
-  if (!r.ok) throw new Error('eastmoney http ' + r.status);
+// 拉一只股票自 2023-01-01 以来的日 K 线（搜狐 hisHq，未复权），返回 [[日期,开,收,高,低,量], ...]（按日期升序）
+// 搜狐返回倒序（最新在前），字段为 [日期,开,收,涨跌额,涨跌幅,最低,最高,量(手),额,换手率]
+async function fetchStockKlines(code) {
+  const url = `https://q.stock.sohu.com/hisHq?code=cn_${code}&start=20230101&end=${todayYmd()}`;
+  const r = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(12000) });
+  if (!r.ok) throw new Error('sohu http ' + r.status);
   const d = await r.json();
-  const klines = d?.data?.klines;
-  if (!Array.isArray(klines) || !klines.length) throw new Error('eastmoney no data');
-  return klines.map(k => { const p = k.split(','); return [p[0], +p[1], +p[2], +p[3], +p[4], +p[5]]; });
+  const hq = d?.[0]?.hq;
+  if (!Array.isArray(hq) || !hq.length) throw new Error('sohu no data');
+  return hq.reverse().map(k => [k[0], +k[1], +k[2], +k[6], +k[5], +k[7] * 100]);
 }
 // 先查 stock_bars 缓存，未命中再请求东财并存入缓存；请求失败时抛错
 async function getStockBars(stock, db) {
   const [code, market, name] = stock;
   const row = await db.prepare('SELECT bars FROM stock_bars WHERE code=?').bind(code).first();
   if (row) return JSON.parse(row.bars);
-  const bars = await fetchEastmoneyKlines(market, code);
+  const bars = await fetchStockKlines(code);
   await db.prepare('INSERT INTO stock_bars(code,name,market,fetched_at,bars) VALUES(?,?,?,?,?)').bind(code, name, market, Date.now(), JSON.stringify(bars)).run();
   return bars;
 }
@@ -95,11 +95,11 @@ export async function handle(req, env) {
     // ---- 诊断接口：股票清单加载数 + 各候选数据源连通性（不含敏感信息）----
     if (url.pathname === '/api/health' && req.method === 'GET') {
       const probes = {
-        eastmoney_kline: `${EASTMONEY_HOST}/api/qt/stock/kline/get?secid=1.600519&klt=101&fqt=1&beg=20250101&end=${todayYmd()}&fields1=f1,f2,f3,f4,f5&fields2=f51,f52,f53,f54,f55,f56,f57`,
+        sohu_kline: `https://q.stock.sohu.com/hisHq?code=cn_600519&start=20250101&end=${todayYmd()}`,
+        eastmoney_kline: `https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=1.600519&klt=101&fqt=1&beg=20250101&end=${todayYmd()}&fields1=f1,f2,f3,f4,f5&fields2=f51,f52,f53,f54,f55,f56,f57`,
         eastmoney_list: 'https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=5&po=1&np=1&fltt=2&invt=2&fid=f12&fs=m:0+t:6&fields=f12',
         sina: 'https://hq.sinajs.cn/list=sh600519',
         tencent: 'https://qt.gtimg.cn/q=ff_sh600519',
-        sohu: 'https://q.stock.sohu.com/hisHq?code=cn_600519&start=20250101&end=20250110',
         github_raw: 'https://raw.githubusercontent.com/bright-kestrel-30/kaipan-backend/main/README.md',
       };
       const results = {};
