@@ -92,15 +92,25 @@ export async function handle(req, env) {
     // 允许 Authorization 头：前端在第三方 Cookie 被拦截时改用 Bearer Token 传递身份
     if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: { ...corsHeaders, 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type, Authorization', 'Access-Control-Max-Age': '86400' } });
     if (!db) return reply({ error: '排行榜服务尚未配置' }, 503);
-    // ---- 诊断接口：股票清单加载数 + 东财连通性（不含敏感信息）----
+    // ---- 诊断接口：股票清单加载数 + 各候选数据源连通性（不含敏感信息）----
     if (url.pathname === '/api/health' && req.method === 'GET') {
-      let eastmoney = 'unknown', eastmoneyError = null;
-      try {
-        const r = await fetch(`${EASTMONEY_HOST}/api/qt/stock/kline/get?secid=1.600519&klt=101&fqt=1&beg=20250101&end=${todayYmd()}&fields1=f1,f2,f3,f4,f5&fields2=f51,f52,f53,f54,f55,f56,f57`, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(8000) });
-        if (!r.ok) eastmoney = 'http_' + r.status;
-        else { const d = await r.json(); eastmoney = (d?.data?.klines?.length) ? 'ok' : 'no_data'; }
-      } catch (e) { eastmoney = 'error'; eastmoneyError = String((e && e.message) || e); }
-      return reply({ ok: true, stocks: STOCKS.length, eastmoney, eastmoneyError });
+      const probes = {
+        eastmoney_kline: `${EASTMONEY_HOST}/api/qt/stock/kline/get?secid=1.600519&klt=101&fqt=1&beg=20250101&end=${todayYmd()}&fields1=f1,f2,f3,f4,f5&fields2=f51,f52,f53,f54,f55,f56,f57`,
+        eastmoney_list: 'https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=5&po=1&np=1&fltt=2&invt=2&fid=f12&fs=m:0+t:6&fields=f12',
+        sina: 'https://hq.sinajs.cn/list=sh600519',
+        tencent: 'https://qt.gtimg.cn/q=ff_sh600519',
+        sohu: 'https://q.stock.sohu.com/hisHq?code=cn_600519&start=20250101&end=20250110',
+        github_raw: 'https://raw.githubusercontent.com/bright-kestrel-30/kaipan-backend/main/README.md',
+      };
+      const results = {};
+      for (const [name, u] of Object.entries(probes)) {
+        try {
+          const r = await fetch(u, { headers: { 'User-Agent': 'Mozilla/5.0', Referer: 'https://quote.eastmoney.com/' }, signal: AbortSignal.timeout(6000) });
+          if (!r.ok) results[name] = 'http_' + r.status;
+          else { const t = await r.text(); results[name] = t.length > 20 ? 'ok' : 'empty'; }
+        } catch (e) { results[name] = 'error:' + String((e && e.message) || e).slice(0, 80); }
+      }
+      return reply({ ok: true, stocks: STOCKS.length, probes: results });
     }
     if (req.method === 'POST') {
       // 原版：Origin 与本域不同即 403；补丁版：白名单内的前端来源也放行
