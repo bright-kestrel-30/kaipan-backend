@@ -47,6 +47,14 @@ CREATE TABLE \`sessions\` (
 CREATE INDEX \`sessions_player\` ON \`sessions\` (\`player\`,\`created\`);
 --> statement-breakpoint
 CREATE INDEX \`sessions_rank\` ON \`sessions\` (\`days\`,\`ret\`,\`dd\`);
+--> statement-breakpoint
+CREATE TABLE \`stock_bars\` (
+	\`code\` text PRIMARY KEY NOT NULL,
+	\`name\` text NOT NULL,
+	\`market\` integer NOT NULL,
+	\`fetched_at\` integer NOT NULL,
+	\`bars\` text NOT NULL
+);
 `;
 
 function initSchema(db) {
