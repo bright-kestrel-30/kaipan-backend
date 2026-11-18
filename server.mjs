@@ -33,14 +33,17 @@ export async function handle(req, env) {
   try {
     const db = env.DB;
     // ---- 预检请求：浏览器跨域 POST 前会先发 OPTIONS，直接放行 ----
-    if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: { ...corsHeaders, 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type', 'Access-Control-Max-Age': '86400' } });
+    // 允许 Authorization 头：前端在第三方 Cookie 被拦截时改用 Bearer Token 传递身份
+    if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: { ...corsHeaders, 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type, Authorization', 'Access-Control-Max-Age': '86400' } });
     if (!db) return reply({ error: '排行榜服务尚未配置' }, 503);
     if (req.method === 'POST') {
       // 原版：Origin 与本域不同即 403；补丁版：白名单内的前端来源也放行
       if (origin && origin !== url.origin && !ALLOWED_ORIGINS.has(origin)) return reply({ error: '请求来源不匹配' }, 403);
       if (!req.headers.get('content-type')?.startsWith('application/json')) return reply({ error: '需要 JSON 请求' }, 415);
     }
-    let token = req.headers.get('cookie')?.match(/(?:^|;\s*)kaipan_player=([a-f0-9]{64})(?:;|$)/)?.[1];
+    // 身份凭证：优先读 HttpOnly Cookie；浏览器拦截第三方 Cookie 时，改读 Authorization: Bearer 头
+    let token = req.headers.get('cookie')?.match(/(?:^|;\s*)kaipan_player=([a-f0-9]{64})(?:;|$)/)?.[1]
+      || req.headers.get('authorization')?.match(/^Bearer ([a-f0-9]{64})$/)?.[1];
     let player = token ? await db.prepare('SELECT id,name FROM players WHERE token=?').bind(await hash(token)).first() : null;
     if (!player) {
       if (url.pathname !== '/api/me') return reply({ error: '请先刷新页面建立玩家身份' }, 401);
@@ -53,7 +56,7 @@ export async function handle(req, env) {
     }
     let body = {};
     if (req.method === 'POST') { const raw = await req.text(); if (raw.length > 2048) return reply({ error: '请求过大' }, 413); try { body = JSON.parse(raw) } catch { return reply({ error: '请求格式不正确' }, 400) } }
-    if (url.pathname === '/api/me') { if (req.method === 'POST') { const name = typeof body.name === 'string' ? body.name.trim() : ''; if ([...name].length < 1 || [...name].length > 16 || /[\x00-\x1f<>]/.test(name)) return reply({ error: '昵称需为 1–16 个字，请勿使用特殊符号' }, 400); await db.prepare('UPDATE players SET name=? WHERE id=?').bind(name, player.id).run(); player.name = name } return reply(player) }
+    if (url.pathname === '/api/me') { if (req.method === 'POST') { const name = typeof body.name === 'string' ? body.name.trim() : ''; if ([...name].length < 1 || [...name].length > 16 || /[\x00-\x1f<>]/.test(name)) return reply({ error: '昵称需为 1–16 个字，请勿使用特殊符号' }, 400); await db.prepare('UPDATE players SET name=? WHERE id=?').bind(name, player.id).run(); player.name = name } return reply({ ...player, token }) }
     if (url.pathname === '/api/games' && req.method === 'POST') { const days = body.days; if (![34, 89, 144].includes(days)) return reply({ error: '训练周期不正确' }, 400); const id = crypto.randomUUID(), seed = crypto.getRandomValues(new Uint32Array(1))[0], now = Date.now(), state = JSON.stringify(initial()); const res = await db.prepare('INSERT INTO sessions(id,player,days,day,seed,state,created) SELECT ?,?,?,0,?,?,? WHERE (SELECT COUNT(*) FROM sessions WHERE player=? AND created>?)<50').bind(id, player.id, days, seed, state, now, player.id, now - 86400000).run(); if (!res.meta.changes) return reply({ error: '今天已开局 50 次，请明天再来' }, 429); return reply(view({ id, days, day: 0, seed, state })) }
     const match = url.pathname.match(/^\/api\/games\/([a-f0-9-]{36})(\/step)?$/);
     if (match) { let row = await db.prepare('SELECT * FROM sessions WHERE id=? AND player=?').bind(match[1], player.id).first(); if (!row) return reply({ error: '这局不存在或不属于当前玩家' }, 404); if (req.method === 'POST' && match[2]) { if (![null, 0, 0.1, 0.5, 1].includes(body.target) || !Number.isInteger(body.day)) return reply({ error: '交易指令不正确' }, 400); if (row.day === body.day + 1) return reply(view(row)); if (row.day !== body.day || row.day === row.days) return reply({ error: '进度已更新，请重新载入这局' }, 409); const day = row.day + 1, bar = generate(row.seed, row.days)[OPEN + day], s = step(JSON.parse(row.state), bar, body.target, day), done = day === row.days; await db.prepare('UPDATE sessions SET day=?,state=?,finished=?,ret=?,dd=?,trades=? WHERE id=? AND day=?').bind(day, JSON.stringify(s), done ? Date.now() : null, done ? (s.cash + s.shares * bar.c) / 100000 - 1 : null, done ? s.drawdown : null, done ? s.trades.length : null, row.id, row.day).run(); row = await db.prepare('SELECT * FROM sessions WHERE id=?').bind(row.id).first() } return reply(view(row)) }
