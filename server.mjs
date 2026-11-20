@@ -48,13 +48,13 @@ async function getStockBars(stock, db) {
   await db.prepare('INSERT INTO stock_bars(code,name,market,fetched_at,bars) VALUES(?,?,?,?,?)').bind(code, name, market, Date.now(), JSON.stringify(bars)).run();
   return bars;
 }
-// 从全市场随机抽一只股票、再随机抽一段历史，返回 {code,name,from,to,bars:[{o,c,h,l,v}]}
-// 网络问题立即返回 null（走随机生成兜底）；上市太短则换下一只，最多 5 次
+// 只用腾龙股份（603158，沪市）——每次随机抽一段它的历史，返回 {code,name,from,to,bars:[{o,c,h,l,v}]}
+// 网络问题立即返回 null（走随机生成兜底）；历史太短则重试，最多 5 次
+const TENGLONG = ['603158', 1, '腾龙股份'];
 async function pickRealGame(days, db) {
-  if (!STOCKS.length) return null;
   const need = OPEN + days + 1;
   for (let attempt = 0; attempt < 5; attempt++) {
-    const stock = STOCKS[Math.floor(Math.random() * STOCKS.length)];
+    const stock = TENGLONG;
     let raw;
     try { raw = await getStockBars(stock, db); } catch { return null; }
     if (!raw || raw.length < need) continue;
